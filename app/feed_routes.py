@@ -21,14 +21,23 @@ def _format_video_for_feed(video):
     """
     Formats the video document into the clean, minimal JSON required by the new frontend.
     """
+    # Use stored profile pic if available, otherwise fallback to UI Avatars
+    profile_pic = video.get("channel_thumbnail")
+    if not profile_pic:
+        profile_pic = f"https://ui-avatars.com/api/?name={video.get('channel_title', 'T')}&background=random"
+
     return {
         "video_id": video.get("video_id"),
+        "id": video.get("video_id"), # For compatibility with reels.js which expects 'id'
         "title": video.get("title"),
         "channel_name": video.get("channel_title"),
-        "profile_pic": f"https://ui-avatars.com/api/?name={video.get('channel_title', 'T')}&background=random", # Placeholder
+        "channel": video.get("channel_title"), # For compatibility with reels.js which expects 'channel'
+        "profile_pic": profile_pic,
         "likes": video.get("like_count", 0),
         "comments": video.get("comment_count", 0),
-        "shares": 0 # Placeholder, as YouTube API doesn't provide this
+        "comment_count": video.get("comment_count", 0), # For compatibility
+        "shares": 0, # Placeholder, as YouTube API doesn't provide this
+        "is_short": video.get("is_short", False) # Added is_short flag
     }
 
 @router.post("/feed")
