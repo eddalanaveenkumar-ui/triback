@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 
 from .database import users_collection, user_activity_collection, user_follows_collection, videos_collection
-from .firebase_config import verify_token
+from .firebase_config import verify_token, auth as firebase_auth
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn")
@@ -53,36 +53,54 @@ def get_current_user(authorization: Annotated[str | None, Header()] = None):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return uid
 
+# --- Helper to format user profile ---
+def _format_user_profile(db_user):
+    return {
+        "uid": db_user.get("uid"),
+        "username": db_user.get("username"),
+        "email": db_user.get("email"),
+        "display_name": db_user.get("display_name"),
+        "state": db_user.get("state"),
+        "language": db_user.get("language"),
+        "photo_url": db_user.get("photo_url"),
+        "bio": db_user.get("bio")
+    }
+
 # --- User API Endpoints ---
 
 @router.post("/user/google-login")
 def google_login(data: GoogleLoginRequest):
     """
     Handles user login/registration via Google ID Token.
-    Verifies the token, then creates a user if they don't exist.
+    Verifies the token, creates a user if they don't exist, and returns the full user profile.
     """
-    uid = verify_token(data.id_token)
-    if not uid:
-        raise HTTPException(status_code=401, detail="Invalid or expired Google token")
+    try:
+        decoded_token = firebase_auth.verify_id_token(data.id_token)
+        uid = decoded_token['uid']
+    except Exception as e:
+        logger.error(f"Invalid Google token: {e}")
+        raise HTTPException(status_code=401, detail=f"Invalid or expired Google token: {e}")
 
     # Check if user exists
     user = users_collection.find_one({"uid": uid})
     
     if user:
-        # User exists, login successful
+        # User exists, return their profile
         logger.info(f"Existing user logged in via Google: {uid}")
-        return {"status": "success", "message": "User logged in", "new_user": False}
+        return {"new_user": False, "profile": _format_user_profile(user)}
     else:
-        # New user, create a profile stub
-        # We don't have email/name from the token here, but Firebase Admin SDK would.
-        # For now, we create a stub and expect the client to call /user/profile to complete it.
+        # New user, create a profile stub from the decoded token
         logger.info(f"New user created via Google: {uid}")
-        users_collection.insert_one({
+        new_user_data = {
             "uid": uid,
+            "email": decoded_token.get("email"),
+            "display_name": decoded_token.get("name"),
+            "photo_url": decoded_token.get("picture"),
             "created_at": datetime.utcnow(),
             "last_updated": datetime.utcnow()
-        })
-        return {"status": "success", "message": "New user created", "new_user": True}
+        }
+        users_collection.insert_one(new_user_data)
+        return {"new_user": True, "profile": _format_user_profile(new_user_data)}
 
 
 @router.post("/user/register")
@@ -154,15 +172,7 @@ def get_user_profile(uid: str = Depends(get_current_user)):
     """Retrieves a user's profile."""
     user_profile = users_collection.find_one({"uid": uid}, {"_id": 0})
     if user_profile:
-        return {
-            "username": user_profile.get("username"),
-            "email": user_profile.get("email"),
-            "display_name": user_profile.get("display_name"),
-            "state": user_profile.get("state"),
-            "language": user_profile.get("language"),
-            "photo_url": user_profile.get("photo_url"),
-            "bio": user_profile.get("bio")
-        }
+        return _format_user_profile(user_profile)
     raise HTTPException(status_code=404, detail="User profile not found")
 
 # --- Feed Endpoint ---
