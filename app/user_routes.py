@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Body, Query
 from pydantic import BaseModel
 from typing import Optional, Annotated, List
 from datetime import datetime
+import logging
 
 from .database import users_collection, user_activity_collection, user_follows_collection, videos_collection
 from .firebase_config import verify_token
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn")
 
 # --- Pydantic Models ---
 class UserProfile(BaseModel):
@@ -20,6 +22,9 @@ class UserRegistration(BaseModel):
     username: str
     email: str
     display_name: str
+
+class GoogleLoginRequest(BaseModel):
+    id_token: str
 
 class UserActivity(BaseModel):
     video_id: str
@@ -49,6 +54,36 @@ def get_current_user(authorization: Annotated[str | None, Header()] = None):
     return uid
 
 # --- User API Endpoints ---
+
+@router.post("/user/google-login")
+def google_login(data: GoogleLoginRequest):
+    """
+    Handles user login/registration via Google ID Token.
+    Verifies the token, then creates a user if they don't exist.
+    """
+    uid = verify_token(data.id_token)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid or expired Google token")
+
+    # Check if user exists
+    user = users_collection.find_one({"uid": uid})
+    
+    if user:
+        # User exists, login successful
+        logger.info(f"Existing user logged in via Google: {uid}")
+        return {"status": "success", "message": "User logged in", "new_user": False}
+    else:
+        # New user, create a profile stub
+        # We don't have email/name from the token here, but Firebase Admin SDK would.
+        # For now, we create a stub and expect the client to call /user/profile to complete it.
+        logger.info(f"New user created via Google: {uid}")
+        users_collection.insert_one({
+            "uid": uid,
+            "created_at": datetime.utcnow(),
+            "last_updated": datetime.utcnow()
+        })
+        return {"status": "success", "message": "New user created", "new_user": True}
+
 
 @router.post("/user/register")
 def register_user(data: UserRegistration, uid: str = Depends(get_current_user)):
