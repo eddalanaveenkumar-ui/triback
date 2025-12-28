@@ -9,7 +9,6 @@ from .services.viral_engine import ViralEngine
 from .config import settings
 from .constants import NICHES, STATES, LANGUAGES
 from .user_routes import router as user_router
-from .feed_routes import router as feed_router # Import the new feed router
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +27,6 @@ app.add_middleware(
 
 # --- API Routers ---
 app.include_router(user_router, prefix="/api", tags=["User"])
-app.include_router(feed_router, prefix="/api", tags=["Feed"]) # Add the feed router with /api prefix
 
 # --- Background Scheduler ---
 scheduler = BackgroundScheduler()

@@ -1,48 +1,81 @@
-import firebase_admin
-from firebase_admin import credentials, auth
 import os
 import json
+import logging
+import firebase_admin
+from firebase_admin import credentials, auth
 
-# Path to the user data folder
-USER_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "user_data")
-KEY_FILE_PATH = os.path.join(USER_DATA_DIR, "serviceAccountKey.json")
+logger = logging.getLogger("uvicorn")
 
-# Cloud Deployment Strategy:
-# 1. Try to load from local file in 'user_data/serviceAccountKey.json' (Development)
-# 2. If not found, try to load from Environment Variable 'FIREBASE_CREDENTIALS' (Production/Cloud)
+def initialize_firebase():
+    """
+    Initializes the Firebase Admin SDK.
+    Automatically fixes the common '\n' issue in private keys from Render env vars.
+    """
+    try:
+        # Check if already initialized to avoid "App already exists" error
+        if firebase_admin._apps:
+            return
 
-try:
-    if os.path.exists(KEY_FILE_PATH):
-        # Local Development
-        cred = credentials.Certificate(KEY_FILE_PATH)
-        print(f"✅ Loaded Firebase credentials from: {KEY_FILE_PATH}")
-    else:
-        # Cloud Deployment (Render/Railway)
+        cred = None
+        
+        # 1. Try loading from FIREBASE_CREDENTIALS (JSON string) - Recommended for Render
         firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS")
         if firebase_creds_json:
-            creds_dict = json.loads(firebase_creds_json)
-            cred = credentials.Certificate(creds_dict)
-            print("✅ Loaded Firebase credentials from Environment Variable.")
+            try:
+                creds_dict = json.loads(firebase_creds_json)
+                # FIX: Replace literal \n with actual newlines
+                if "private_key" in creds_dict:
+                    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+                cred = credentials.Certificate(creds_dict)
+            except Exception as e:
+                logger.error(f"Error parsing FIREBASE_CREDENTIALS: {e}")
+
+        # 2. Fallback: Try loading from individual environment variables
+        if not cred:
+            private_key = os.getenv("FIREBASE_PRIVATE_KEY")
+            if private_key:
+                # FIX: Replace literal \n with actual newlines
+                private_key = private_key.replace("\\n", "\n")
+                
+            # Construct dict from env vars
+            creds_dict = {
+                "type": "service_account",
+                "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+                "private_key_id": os.getenv("FIREBASE_PRIVATE_KEY_ID"),
+                "private_key": private_key,
+                "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+                "client_id": os.getenv("FIREBASE_CLIENT_ID"),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_CERT_URL")
+            }
+            
+            # Remove None values and check if we have the minimum required fields
+            creds_dict = {k: v for k, v in creds_dict.items() if v is not None}
+            
+            if "project_id" in creds_dict and "private_key" in creds_dict:
+                cred = credentials.Certificate(creds_dict)
+
+        if cred:
+            firebase_admin.initialize_app(cred)
+            logger.info("✅ Firebase Admin SDK initialized successfully.")
         else:
-            # Fallback check for the old location just in case
-            old_path = "serviceAccountKey.json"
-            if os.path.exists(old_path):
-                 cred = credentials.Certificate(old_path)
-                 print(f"⚠️ Loaded credentials from root folder. Please move to {USER_DATA_DIR}")
-            else:
-                raise FileNotFoundError(f"No serviceAccountKey.json found in {USER_DATA_DIR} and FIREBASE_CREDENTIALS env var not set.")
+            logger.warning("⚠️ Firebase credentials not found. Google Login will fail.")
 
-    firebase_admin.initialize_app(cred)
-    print("✅ Firebase Admin SDK initialized successfully.")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Firebase: {e}")
 
-except Exception as e:
-    print(f"🔥 Firebase Admin SDK Error: {e}")
-    print(f"👉 Please ensure 'serviceAccountKey.json' is inside the '{USER_DATA_DIR}' folder.")
+# Initialize immediately on import
+initialize_firebase()
 
-def verify_token(id_token: str):
-    """Verifies the Firebase ID token and returns the user's UID."""
+def verify_token(id_token):
+    """
+    Verifies a Firebase ID token and returns the UID.
+    """
     try:
         decoded_token = auth.verify_id_token(id_token)
         return decoded_token['uid']
     except Exception as e:
+        logger.error(f"Token verification failed: {e}")
         return None

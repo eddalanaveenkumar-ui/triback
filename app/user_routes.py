@@ -78,7 +78,7 @@ def google_login(data: GoogleLoginRequest):
         decoded_token = firebase_auth.verify_id_token(data.id_token)
         uid = decoded_token['uid']
     except Exception as e:
-        logger.error(f"Invalid Google token: {e}")
+        logger.error(f"Google Login Failed: {e}", exc_info=True)
         raise HTTPException(status_code=401, detail=f"Invalid or expired Google token: {e}")
 
     # Check if user exists
