@@ -28,6 +28,11 @@ def initialize_firebase():
                     key = creds_dict["private_key"].replace("\\n", "\n")
                     creds_dict["private_key"] = key
                     logger.info(f"🔑 Loaded Private Key from JSON (starts with): {key[:35]}...")
+                
+                # Remove universe_domain if present, as it can cause issues with some lib versions
+                if "universe_domain" in creds_dict:
+                    del creds_dict["universe_domain"]
+
                 cred = credentials.Certificate(creds_dict)
             except Exception as e:
                 logger.error(f"Error parsing FIREBASE_CREDENTIALS: {e}")

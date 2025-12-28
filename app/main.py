@@ -8,7 +8,7 @@ from .services.youtube_service import YouTubeService
 from .services.viral_engine import ViralEngine
 from .config import settings
 from .constants import NICHES, STATES, LANGUAGES
-from .user_routes import router as user_router
+from . import feed_routes, user_routes
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +26,8 @@ app.add_middleware(
 )
 
 # --- API Routers ---
-app.include_router(user_router, prefix="/api", tags=["User"])
+app.include_router(feed_routes.router, prefix="/api", tags=["Feed"])
+app.include_router(user_routes.router, prefix="/api", tags=["User Activity"])
 
 # --- Background Scheduler ---
 scheduler = BackgroundScheduler()

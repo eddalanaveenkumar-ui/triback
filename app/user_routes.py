@@ -4,28 +4,13 @@ from typing import Optional, Annotated, List
 from datetime import datetime
 import logging
 
-from .database import users_collection, user_activity_collection, user_follows_collection, videos_collection
-from .firebase_config import verify_token, auth as firebase_auth
+from .database import user_activity_collection, user_follows_collection
+from .firebase_config import verify_token
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn")
 
 # --- Pydantic Models ---
-class UserProfile(BaseModel):
-    state: Optional[str] = None
-    language: Optional[str] = None
-    photo_url: Optional[str] = None
-    bio: Optional[str] = None
-    display_name: Optional[str] = None
-
-class UserRegistration(BaseModel):
-    username: str
-    email: str
-    display_name: str
-
-class GoogleLoginRequest(BaseModel):
-    id_token: str
-
 class UserActivity(BaseModel):
     video_id: str
     event_type: str
@@ -34,9 +19,6 @@ class UserActivity(BaseModel):
 
 class UserFollow(BaseModel):
     channel_id: str
-
-class UsernameLookup(BaseModel):
-    username: str
 
 # --- Reusable Authentication Dependency ---
 def get_current_user(authorization: Annotated[str | None, Header()] = None):
@@ -53,149 +35,89 @@ def get_current_user(authorization: Annotated[str | None, Header()] = None):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return uid
 
-# --- Helper to format user profile ---
-def _format_user_profile(db_user):
-    return {
-        "uid": db_user.get("uid"),
-        "username": db_user.get("username"),
-        "email": db_user.get("email"),
-        "display_name": db_user.get("display_name"),
-        "state": db_user.get("state"),
-        "language": db_user.get("language"),
-        "photo_url": db_user.get("photo_url"),
-        "bio": db_user.get("bio")
-    }
-
 # --- User API Endpoints ---
 
-@router.post("/user/google-login")
-def google_login(data: GoogleLoginRequest):
+@router.get("/")
+def api_root():
+    """Root endpoint for API to verify connectivity."""
+    return {"status": "Triangle API is operational"}
+
+# --- User Activity Tracking ---
+
+@router.post("/user/activity")
+def track_user_activity(activity: UserActivity, uid: str = Depends(get_current_user)):
     """
-    Handles user login/registration via Google ID Token.
-    Verifies the token, creates a user if they don't exist, and returns the full user profile.
+    Tracks user interactions with videos (like, watch, pause, etc.)
     """
     try:
-        decoded_token = firebase_auth.verify_id_token(data.id_token)
-        uid = decoded_token['uid']
-    except Exception as e:
-        logger.error(f"Google Login Failed: {e}", exc_info=True)
-        raise HTTPException(status_code=401, detail=f"Invalid or expired Google token: {e}")
-
-    # Check if user exists
-    user = users_collection.find_one({"uid": uid})
-    
-    if user:
-        # User exists, return their profile
-        logger.info(f"Existing user logged in via Google: {uid}")
-        return {"new_user": False, "profile": _format_user_profile(user)}
-    else:
-        # New user, create a profile stub from the decoded token
-        logger.info(f"New user created via Google: {uid}")
-        new_user_data = {
+        activity_data = {
             "uid": uid,
-            "email": decoded_token.get("email"),
-            "display_name": decoded_token.get("name"),
-            "photo_url": decoded_token.get("picture"),
-            "created_at": datetime.utcnow(),
+            "video_id": activity.video_id,
             "last_updated": datetime.utcnow()
         }
-        users_collection.insert_one(new_user_data)
-        return {"new_user": True, "profile": _format_user_profile(new_user_data)}
+        
+        update_fields = {}
+        
+        if activity.event_type == "like":
+            update_fields["liked"] = True
+        elif activity.event_type == "unlike":
+            update_fields["liked"] = False
+        elif activity.event_type == "watch":
+            update_fields["watched"] = True
+            # Increment watch count?
+        elif activity.event_type == "pause":
+            update_fields["paused_at"] = activity.paused_at
+        
+        if activity.duration_watched > 0:
+             # This would need $inc, so we handle it separately or change structure
+             pass 
 
+        if update_fields:
+            user_activity_collection.update_one(
+                {"uid": uid, "video_id": activity.video_id},
+                {"$set": update_fields, "$setOnInsert": {"created_at": datetime.utcnow()}},
+                upsert=True
+            )
+            
+        return {"status": "Activity tracked"}
+    except Exception as e:
+        logger.error(f"Error tracking activity: {e}")
+        raise HTTPException(status_code=500, detail="Failed to track activity")
 
-@router.post("/user/register")
-def register_user(data: UserRegistration, uid: str = Depends(get_current_user)):
+@router.post("/user/follow")
+def follow_channel(follow: UserFollow, uid: str = Depends(get_current_user)):
     """
-    Registers a new user with username, email, and display name.
-    Checks if username is already taken.
+    Follows a channel.
     """
-    # Check if username exists (case insensitive)
-    existing_user = users_collection.find_one({"username": {"$regex": f"^{data.username}$", "$options": "i"}})
-    if existing_user and existing_user.get("uid") != uid:
-        raise HTTPException(status_code=400, detail="User ID already taken")
+    try:
+        user_follows_collection.update_one(
+            {"uid": uid, "channel_id": follow.channel_id},
+            {"$set": {"followed_at": datetime.utcnow()}},
+            upsert=True
+        )
+        return {"status": "Channel followed"}
+    except Exception as e:
+        logger.error(f"Error following channel: {e}")
+        raise HTTPException(status_code=500, detail="Failed to follow channel")
 
-    users_collection.update_one(
-        {"uid": uid},
-        {"$set": {
-            "username": data.username,
-            "email": data.email,
-            "display_name": data.display_name,
-            "created_at": datetime.utcnow(),
-            "last_updated": datetime.utcnow()
-        }},
-        upsert=True
-    )
-    return {"status": "User registered successfully"}
-
-@router.post("/user/lookup")
-def lookup_email_by_username(data: UsernameLookup):
+@router.delete("/user/follow/{channel_id}")
+def unfollow_channel(channel_id: str, uid: str = Depends(get_current_user)):
     """
-    Looks up an email address by username (User ID).
-    Used for login when user enters a username instead of email.
+    Unfollows a channel.
     """
-    user = users_collection.find_one({"username": {"$regex": f"^{data.username}$", "$options": "i"}})
-    if user and "email" in user:
-        return {"email": user["email"]}
-    raise HTTPException(status_code=404, detail="User ID not found")
+    try:
+        result = user_follows_collection.delete_one({"uid": uid, "channel_id": channel_id})
+        if result.deleted_count == 0:
+             raise HTTPException(status_code=404, detail="Channel not found in follows")
+        return {"status": "Channel unfollowed"}
+    except Exception as e:
+        logger.error(f"Error unfollowing channel: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unfollow channel")
 
-@router.get("/user/search")
-def search_users(q: str = Query(..., min_length=1)):
+@router.get("/user/follows")
+def get_user_follows(uid: str = Depends(get_current_user)):
     """
-    Searches for users by username (User ID).
-    Returns a list of matching users with their basic info.
+    Gets list of channels followed by user.
     """
-    users = list(users_collection.find(
-        {"username": {"$regex": q, "$options": "i"}},
-        {"username": 1, "photo_url": 1, "bio": 1, "_id": 0}
-    ).limit(20))
-    return users
-
-@router.post("/user/profile")
-def update_user_profile(profile: UserProfile, uid: str = Depends(get_current_user)):
-    """Creates or updates a user's profile."""
-    update_data = {"last_updated": datetime.utcnow()}
-    if profile.state: update_data["state"] = profile.state
-    if profile.language: update_data["language"] = profile.language
-    if profile.photo_url: update_data["photo_url"] = profile.photo_url
-    if profile.bio is not None: update_data["bio"] = profile.bio
-    if profile.display_name: update_data["display_name"] = profile.display_name
-
-    users_collection.update_one(
-        {"uid": uid},
-        {"$set": update_data},
-        upsert=True
-    )
-    return {"status": "Profile updated successfully"}
-
-@router.get("/user/profile")
-def get_user_profile(uid: str = Depends(get_current_user)):
-    """Retrieves a user's profile."""
-    user_profile = users_collection.find_one({"uid": uid}, {"_id": 0})
-    if user_profile:
-        return _format_user_profile(user_profile)
-    raise HTTPException(status_code=404, detail="User profile not found")
-
-# --- Feed Endpoint ---
-@router.get("/feed")
-def get_feed(state: Optional[str] = None, language: Optional[str] = None, limit: int = 20):
-    """
-    Gets a personalized feed based on state and language.
-    Falls back to global if no personalization is provided.
-    """
-    query = {}
-    if state and language:
-        query = {"state": state, "language": language}
-    elif state:
-        query = {"state": state}
-    elif language:
-        query = {"language": language}
-
-    videos = list(videos_collection.find(query).sort("viral_score", -1).limit(limit))
-    
-    # If personalized feed is empty, fall back to global
-    if not videos:
-        videos = list(videos_collection.find({}).sort("viral_score", -1).limit(limit))
-
-    return videos
-
-# ... (rest of the file is unchanged) ...
+    follows = list(user_follows_collection.find({"uid": uid}, {"_id": 0, "channel_id": 1}))
+    return [f["channel_id"] for f in follows]

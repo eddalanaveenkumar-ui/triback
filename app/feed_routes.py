@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Query
 import pymongo
 import logging
 from typing import Optional, List
@@ -91,6 +91,25 @@ def get_feed(request: FeedRequest):
         logger.error(f"Error in get_feed: {e}")
         traceback.print_exc()
         return []
+
+@router.get("/feed")
+def get_feed_via_query(
+    state: Optional[str] = None, 
+    language: Optional[str] = None, 
+    limit: int = 20, 
+    skip: int = 0, 
+    is_short: Optional[bool] = None
+):
+    """
+    GET version of the feed endpoint for compatibility.
+    """
+    return get_feed(FeedRequest(
+        state=state, 
+        language=language, 
+        limit=limit, 
+        skip=skip, 
+        is_short=is_short
+    ))
 
 @router.get("/video/{video_id}")
 def get_video_details(video_id: str):
