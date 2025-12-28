@@ -25,7 +25,9 @@ def initialize_firebase():
                 creds_dict = json.loads(firebase_creds_json)
                 # FIX: Replace literal \n with actual newlines
                 if "private_key" in creds_dict:
-                    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+                    key = creds_dict["private_key"].replace("\\n", "\n")
+                    creds_dict["private_key"] = key
+                    logger.info(f"🔑 Loaded Private Key from JSON (starts with): {key[:35]}...")
                 cred = credentials.Certificate(creds_dict)
             except Exception as e:
                 logger.error(f"Error parsing FIREBASE_CREDENTIALS: {e}")
@@ -36,6 +38,7 @@ def initialize_firebase():
             if private_key:
                 # FIX: Replace literal \n with actual newlines
                 private_key = private_key.replace("\\n", "\n")
+                logger.info(f"🔑 Loaded Private Key from Env Var (starts with): {private_key[:35]}...")
                 
             # Construct dict from env vars
             creds_dict = {
