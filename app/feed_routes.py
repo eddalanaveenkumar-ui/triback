@@ -33,6 +33,7 @@ def _format_video_for_feed(video):
         "channel_name": video.get("channel_title"),
         "channel": video.get("channel_title"), # For compatibility with reels.js which expects 'channel'
         "profile_pic": profile_pic,
+        "thumbnail_url": video.get("thumbnail_url"), # Added thumbnail URL from DB
         "likes": video.get("like_count", 0),
         "comments": video.get("comment_count", 0),
         "comment_count": video.get("comment_count", 0), # For compatibility
